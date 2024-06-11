@@ -224,7 +224,7 @@ async def arun_one_episode(
         except Exception as e:
             logging.error(f"Failed to save episode log: {e}")
     # flatten nested list messages
-    return list(itertools.chain(*messages))
+    return list(itertools.chain(*messages)),epilog
 
 
 @gin.configurable
@@ -300,7 +300,7 @@ async def run_async_server(
                 for model_name in agents_model_dict.values()
             ],
         )
-    episode_futures = [
+    episode_futures, epilogue = [
         arun_one_episode(
             env=env_agent_combo[0],
             agent_list=env_agent_combo[1],
@@ -320,7 +320,7 @@ async def run_async_server(
         else [await i for i in episode_futures]
     )
 
-    return cast(list[list[tuple[str, str, Message]]], batch_results)
+    return cast(list[list[tuple[str, str, Message]]], batch_results), epilogue
 
 
 async def arun_one_script(
@@ -410,7 +410,7 @@ async def arun_one_script(
         except Exception as e:
             logging.error(f"Failed to save episode log: {e}")
     # flatten nested list messages
-    return list(itertools.chain(*messages))
+    return list(itertools.chain(*messages)),epilog
 
 
 async def aevaluate_one_episode(
