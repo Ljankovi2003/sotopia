@@ -41,7 +41,7 @@ def run_sync_server(
     partial_background_file: str | None = None,
     full_background_file: str | None = None,
     mode: str | None = None,
-) -> list[tuple[str, str, Message]]:
+):
     # Create Environment and agents
     # This step will be moved to outside this function
 
