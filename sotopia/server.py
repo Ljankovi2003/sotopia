@@ -41,7 +41,7 @@ def run_sync_server(
     partial_background_file: str | None = None,
     full_background_file: str | None = None,
     mode: str | None = None,
-):
+) -> list[tuple[str, str, Message]]:
     # Create Environment and agents
     # This step will be moved to outside this function
 
@@ -112,13 +112,10 @@ async def arun_one_episode(
     json_in_script: bool = False,
     tag: str | None = None,
     push_to_db: bool = False,
-) -> tuple[list[tuple[str, str, Message]], EpisodeLog]:
+) -> list[tuple[str, str, Message]]:
     agents = Agents({agent.agent_name: agent for agent in agent_list})
-    # Reset environment and agents
     environment_messages = env.reset(agents=agents, omniscient=omniscient)
     agents_model_names = [model_dict["agent1"], model_dict["agent2"]]
-
-    # Initialize agents with proper classes
     for agent_name, agent_model in zip(env.agents, agents_model_names):
         if agent_model == "human":
             agents[agent_name] = HumanAgent(agent_name)
@@ -135,12 +132,11 @@ async def arun_one_episode(
             agents[agent_name] = LLMAgent(
                 agent_name, model_name=agent_model, script_like=script_like
             )
-
     agents.reset()
 
     messages: list[list[tuple[str, str, Message]]] = []
 
-    # Main event loop
+    # Main Event Loop
     done = False
     messages.append(
         [
@@ -148,15 +144,13 @@ async def arun_one_episode(
             for agent_name in env.agents
         ]
     )
-
-    # Set goal for agents
+    # set goal for agents
     for index, agent_name in enumerate(env.agents):
         agents[agent_name].goal = env.profile.agent_goals[index]
-
     rewards: list[list[float]] = []
     reasons: list[str] = []
     while not done:
-        # Gather agent messages
+        # gather agent messages
         agent_messages: dict[str, AgentAction] = dict()
         actions = await asyncio.gather(
             *[
@@ -164,41 +158,46 @@ async def arun_one_episode(
                 for agent_name in env.agents
             ]
         )
-
-        # Manually handle script-like agent masking, if applicable
         if script_like:
+            # manually mask one message
             agent_mask = env.action_mask
             for idx in range(len(agent_mask)):
+                print("Current mask: ", agent_mask)
                 if agent_mask[idx] == 0:
+                    print("Action not taken: ", actions[idx])
                     actions[idx] = AgentAction(action_type="none", argument="")
+                else:
+                    print("Current action taken: ", actions[idx])
 
-        # Prepare agent messages for environment
+        # actions = cast(list[AgentAction], actions)
         for idx, agent_name in enumerate(env.agents):
             agent_messages[agent_name] = actions[idx]
+
             messages[-1].append((agent_name, "Environment", agent_messages[agent_name]))
 
-        # Send agent messages to environment and collect responses
+        # send agent messages to environment
         (
             environment_messages,
             rewards_in_turn,
             terminated,
-            _,
+            ___,
             info,
         ) = await env.astep(agent_messages)
-
         messages.append(
             [
                 ("Environment", agent_name, environment_messages[agent_name])
                 for agent_name in env.agents
             ]
         )
+        # print("Environment message: ", environment_messages)
+        # exit(0)
         rewards.append([rewards_in_turn[agent_name] for agent_name in env.agents])
         reasons.append(
             " ".join(info[agent_name]["comments"] for agent_name in env.agents)
         )
         done = all(terminated.values())
 
-    # Create episode log
+    # TODO: clean up this part
     epilog = EpisodeLog(
         environment=env.profile.pk,
         agents=[agent.profile.pk for agent in agent_list],
@@ -208,12 +207,10 @@ async def arun_one_episode(
             [(m[0], m[1], m[2].to_natural_language()) for m in messages_in_turn]
             for messages_in_turn in messages
         ],
-        reasoning=reasons,
+        reasoning=info[env.agents[0]]["comments"],
         rewards=[info[agent_name]["complete_rating"] for agent_name in env.agents],
-        rewards_prompt=info.get("rewards_prompt", {}).get("overall_prompt", ""),
+        rewards_prompt=info["rewards_prompt"]["overall_prompt"],
     )
-
-    # Print out epilog information
     rich.print(epilog.rewards_prompt)
     agent_profiles, conversation = epilog.render_for_humans()
     for agent_profile in agent_profiles:
@@ -221,15 +218,13 @@ async def arun_one_episode(
     for message in conversation:
         rich.print(message)
 
-    # Save to database if required
     if push_to_db:
         try:
             epilog.save()
         except Exception as e:
             logging.error(f"Failed to save episode log: {e}")
-
-    # Return flat list of messages and the episode log
-    return list(itertools.chain(*messages)), epilog
+    # flatten nested list messages
+    return list(itertools.chain(*messages))
 
 
 @gin.configurable
@@ -245,20 +240,20 @@ async def run_async_server(
     tag: str | None = None,
     push_to_db: bool = False,
     using_async: bool = True,
-) -> tuple[list[list[tuple[str, str, Message]]], list]:
+) -> list[list[tuple[str, str, Message]]]:
     """
     Doc incomplete
 
     Args:
         omniscient (bool): Whether the agent knows the goal of the other, default to False
         script_like (bool): Whether we generate the turn in script like manner, default to False
-        json_in_script (bool): Whether we require the script generator to return JSON (Only valid when script_like is True), default to False
+        json_in_script (bool): Whether we requires the script generator to return json (Only valid when script_like is True), default to False
 
     Note: env_agent_combo_list is optional. When it defaults to [], sampler is used
     else the sampler is not used. Please pass in BaseSampler or simply not specify it when using this option.
     """
 
-    assert not (push_to_db and tag is None), "Please provide a tag when push to DB"
+    assert not (push_to_db and tag is None), "please provide a tag when push to db"
 
     # Create Environment and agents
     # This step will be moved to outside this function
@@ -305,7 +300,7 @@ async def run_async_server(
                 for model_name in agents_model_dict.values()
             ],
         )
-    episode_futures= zip(*[
+    episode_futures = [
         arun_one_episode(
             env=env_agent_combo[0],
             agent_list=env_agent_combo[1],
@@ -317,25 +312,15 @@ async def run_async_server(
             push_to_db=push_to_db,
         )
         for env_agent_combo in env_agent_combo_iter
-    ])
-    # Unpack results into episode_futures and epilogues lists
-    episode_futures = []
-    epilogues = []
+    ]
 
-    for result in episode_futures:
-        if isinstance(result, tuple) and len(result) == 2:
-            episode_futures.append(result[0])
-            epilogues.append(result[1])
-        else:
-            # Handle unexpected result types or values
-            raise ValueError(f"Unexpected result type: {result}")
     batch_results = (
         await tqdm_asyncio.gather(*episode_futures, desc="Running one batch")
         if using_async
         else [await i for i in episode_futures]
     )
 
-    return cast(list[list[tuple[str, str, Message]]], batch_results), list(epilogues)
+    return cast(list[list[tuple[str, str, Message]]], batch_results)
 
 
 async def arun_one_script(
@@ -425,7 +410,7 @@ async def arun_one_script(
         except Exception as e:
             logging.error(f"Failed to save episode log: {e}")
     # flatten nested list messages
-    return list(itertools.chain(*messages)),epilog
+    return list(itertools.chain(*messages))
 
 
 async def aevaluate_one_episode(
